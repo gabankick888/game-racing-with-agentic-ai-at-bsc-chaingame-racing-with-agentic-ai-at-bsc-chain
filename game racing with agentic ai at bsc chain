@@ -1,0 +1,167 @@
+
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+contract AIRacingArena {
+
+    address public owner;
+    address public aiAgent;
+
+    uint256 public racerCount;
+    uint256 public raceCount;
+
+    enum Strategy {
+        Speed,
+        Balanced,
+        Defensive
+    }
+
+    struct Racer {
+        string name;
+        address player;
+    }
+
+    struct Race {
+        uint256 entryFee;
+        uint256 prizePool;
+        address winner;
+        bool finalized;
+    }
+
+    mapping(uint256 => Racer) public racers;
+    mapping(uint256 => Race) public races;
+
+    mapping(uint256 => address[]) public participants;
+    mapping(uint256 => mapping(address => bool)) public joined;
+
+    mapping(uint256 => Strategy) public strategies;
+
+    mapping(address => uint256) public rewards;
+
+    event RacerCreated(uint256 racerId, address player);
+    event RaceCreated(uint256 raceId, uint256 entryFee);
+    event JoinedRace(uint256 raceId, address player);
+    event RaceFinished(uint256 raceId, address winner);
+    event RewardClaimed(address player, uint256 amount);
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Not owner");
+        _;
+    }
+
+    modifier onlyAgent() {
+        require(msg.sender == aiAgent, "Not AI agent");
+        _;
+    }
+
+    constructor(address _aiAgent) {
+        owner = msg.sender;
+        aiAgent = _aiAgent;
+    }
+
+    // Change AI agent
+    function setAgent(address _agent) external onlyOwner {
+        require(_agent != address(0), "Invalid agent");
+        aiAgent = _agent;
+    }
+
+    // Register racing car
+    function createRacer(string calldata name) external {
+        racerCount++;
+
+        racers[racerCount] = Racer({
+            name: name,
+            player: msg.sender
+        });
+
+        emit RacerCreated(racerCount, msg.sender);
+    }
+
+    // Create new race
+    function createRace(uint256 entryFee)
+        external onlyOwner
+    {
+        require(entryFee > 0, "Invalid fee");
+
+        raceCount++;
+
+        races[raceCount] = Race({
+            entryFee: entryFee,
+            prizePool: 0,
+            winner: address(0),
+            finalized: false
+        });
+
+        emit RaceCreated(raceCount, entryFee);
+    }
+
+    // Join race with AI strategy
+    function joinRace(
+        uint256 raceId,
+        uint256 racerId,
+        Strategy strategy
+    ) external payable {
+
+        Race storage race = races[raceId];
+
+        require(raceId > 0 && raceId <= raceCount, "Invalid race");
+        require(!race.finalized, "Race finished");
+        require(!joined[raceId][msg.sender], "Already joined");
+        require(racers[racerId].player == msg.sender, "Not your racer");
+        require(msg.value == race.entryFee, "Incorrect entry fee");
+
+        joined[raceId][msg.sender] = true;
+        participants[raceId].push(msg.sender);
+
+        strategies[raceId] = strategy;
+
+        race.prizePool += msg.value;
+
+        emit JoinedRace(raceId, msg.sender);
+    }
+
+    // AI agent determines race winner
+    function finalizeRace(
+        uint256 raceId,
+        address winner
+    ) external onlyAgent {
+
+        Race storage race = races[raceId];
+
+        require(!race.finalized, "Already finalized");
+        require(joined[raceId][winner], "Winner not registered");
+        require(participants[raceId].length >= 2, "Need 2 racers");
+
+        race.finalized = true;
+        race.winner = winner;
+
+        rewards[winner] += race.prizePool;
+
+        emit RaceFinished(raceId, winner);
+    }
+
+    // Claim BNB rewards
+    function claimReward() external {
+
+        uint256 amount = rewards[msg.sender];
+
+        require(amount > 0, "No reward");
+
+        rewards[msg.sender] = 0;
+
+        (bool success, ) = payable(msg.sender).call{
+            value: amount
+        }("");
+
+        require(success, "Transfer failed");
+
+        emit RewardClaimed(msg.sender, amount);
+    }
+
+    // View participants
+    function getParticipants(uint256 raceId)
+        external view returns (address[] memory)
+    {
+        return participants[raceId];
+    }
+}
